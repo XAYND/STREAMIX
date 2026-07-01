@@ -1,0 +1,11 @@
+node_modules/
+backend/key-server/node_modules/
+
+backend/key-server/.env
+backend/key-server/logs/
+*.log
+
+.DS_Store
+Thumbs.db
+
+certs/*.pem

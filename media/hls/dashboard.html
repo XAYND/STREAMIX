@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STREAMIX — Centre de contrôle</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <main class="page">
+
+    <!-- 1. HERO ------------------------------------------------------- -->
+    <header class="hero reveal">
+      <div class="hero__row">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true"><span></span></div>
+          <div>
+            <h1 class="hero__title">STREAMIX <span>Centre de contrôle</span></h1>
+            <p class="hero__sub">Lecture vidéo HLS sécurisée, avec segments chiffrés et jetons d’accès temporaires.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="badges" id="badges">
+        <span class="badge" data-state="ok"    id="badge-https"><i></i>HTTPS actif</span>
+        <span class="badge" data-state="ok"><i></i>Chiffrement AES-128</span>
+        <span class="badge" data-state="ok"><i></i>Jeton masqué</span>
+        <span class="badge" data-state="pending" id="badge-keyserver"><i></i>Serveur de clés en ligne</span>
+        <span class="badge" data-state="ok"><i></i>Journaux protégés</span>
+      </div>
+    </header>
+
+    <!-- Global error banner ------------------------------------------- -->
+    <div class="alert" id="alert" hidden role="alert">
+      <span class="alert__icon">!</span>
+      <span class="alert__text" id="alert-text"></span>
+      <button class="alert__close" id="alert-close" aria-label="Dismiss">×</button>
+    </div>
+
+    <!-- 2 + 3. VIDEO + TIMELINE (two-column on desktop) --------------- -->
+    <section class="split">
+      <!-- Video card -->
+      <div class="card video-card reveal">
+        <div class="card__head">
+          <h2>Lecteur vidéo</h2>
+          <span class="chip chip--muted" id="playback-state">Initialisation</span>
+        </div>
+
+        <div class="video-shell">
+          <video id="video" controls playsinline></video>
+          <div class="video-loader" id="video-loader">
+            <div class="spinner"></div>
+            <span id="video-loader-text">Préparation de la lecture sécurisée…</span>
+          </div>
+        </div>
+
+        <div class="video-meta">
+          <div class="meta-item"><span class="meta-k">Source</span><code>video.m3u8</code></div>
+          <div class="meta-item"><span class="meta-k">Chiffrement</span><span class="chip chip--ok">AES-128 activé</span></div>
+          <div class="meta-item"><span class="meta-k">Requête de clé</span><span class="chip chip--ok">Protégée</span></div>
+          <button class="btn btn--ghost" id="btn-retry">Relancer la lecture</button>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="card timeline-card reveal">
+        <div class="card__head">
+          <h2>Comment la lecture est sécurisée</h2>
+          <span class="chip chip--muted">7 étapes</span>
+        </div>
+        <p class="card__lead">Chaque étape indique l’acteur concerné, la requête HTTP utilisée et le résultat. Aucun jeton n’apparaît jamais dans une URL ni dans la playlist.</p>
+
+        <ol class="timeline" id="timeline">
+          <li class="tl-step" data-step="0">
+            <div class="tl-marker"><span class="tl-num">1</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--browser">Navigateur</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>L’utilisateur ouvre le lecteur</h3>
+              <code class="tl-req">GET /hls/dashboard.html · HTTPS</code>
+              <p>Le tableau de bord se charge en HTTPS. Rien de sensible n’est exposé à ce stade.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="1">
+            <div class="tl-marker"><span class="tl-num">2</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--nginx">Nginx</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Playlist HLS chargée</h3>
+              <code class="tl-req">GET /hls/video.m3u8 → 200</code>
+              <p>Nginx fournit la playlist. Elle indique seulement l’adresse de la clé, sans contenir ni clé ni jeton.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="2">
+            <div class="tl-marker"><span class="tl-num">3</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--nginx">Playlist</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Aucun jeton exposé</h3>
+              <code class="tl-req">#EXT-X-KEY URI="…/key"</code>
+              <p>La playlist ne contient que l’adresse de la clé. Aucun jeton n’y est stocké : il reste en mémoire.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="3">
+            <div class="tl-marker"><span class="tl-num">4</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--key">Serveur de clés</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Jeton temporaire délivré</h3>
+              <code class="tl-req">GET /token · X-Streamix-Session</code>
+              <p>L’application demande un jeton signé de courte durée (300 s), conservé uniquement en mémoire.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="4">
+            <div class="tl-marker"><span class="tl-num">5</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--key">Navigateur → Serveur de clés</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Clé demandée avec en-tête Authorization</h3>
+              <code class="tl-req">GET /key · Authorization: Bearer …</code>
+              <p>hls.js ajoute le jeton dans l’en-tête Authorization au moment de récupérer la clé AES.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="5">
+            <div class="tl-marker"><span class="tl-num">6</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--key">Serveur de clés</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Clé AES délivrée</h3>
+              <code class="tl-req">200 OK · 16-byte AES-128 key</code>
+              <p>Le serveur vérifie la signature et la portée du jeton, puis renvoie la clé de déchiffrement.</p>
+            </div>
+          </li>
+          <li class="tl-step" data-step="6">
+            <div class="tl-marker"><span class="tl-num">7</span></div>
+            <div class="tl-body">
+              <div class="tl-top"><span class="actor actor--browser">Navigateur</span><span class="tl-status" data-status>en attente</span></div>
+              <h3>Lecture vidéo débloquée</h3>
+              <code class="tl-req">Segments decrypted · decision logged</code>
+              <p>hls.js déchiffre chaque segment et la lecture démarre. La décision d’accès est enregistrée dans les journaux protégés.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 4 + 5. MANIFEST PREVIEW + ACCESS EXCHANGE --------------------- -->
+    <section class="split">
+      <div class="card reveal">
+        <div class="card__head"><h2>Aperçu de la playlist</h2><span class="chip chip--ok">Aucun jeton exposé</span></div>
+        <pre class="code-block"><span class="cl comment"># video.m3u8 (extrait)</span>
+<span class="cl">#EXTM3U</span>
+<span class="cl">#EXT-X-VERSION:3</span>
+<span class="cl hi">#EXT-X-KEY:METHOD=AES-128,URI="https://localhost:3001/key"</span>
+<span class="cl">#EXTINF:6.000,</span>
+<span class="cl">segment_000.ts</span></pre>
+        <p class="card__note">La playlist expose uniquement l’adresse de la clé. Le jeton temporaire reste en mémoire et est transmis via un en-tête <strong>Authorization</strong> — jamais dans l’URL, jamais dans la playlist.</p>
+      </div>
+
+      <div class="card reveal">
+        <div class="card__head"><h2>Échange d’accès</h2></div>
+        <div class="exchange">
+          <div class="ex-col">
+            <div class="ex-step">A</div>
+            <h3>Session</h3>
+            <p class="ex-sub">Identifie le client de démonstration.</p>
+            <code>X-Streamix-Session</code>
+          </div>
+          <div class="ex-arrow">→</div>
+          <div class="ex-col">
+            <div class="ex-step">B</div>
+            <h3>Jeton temporaire</h3>
+            <p class="ex-sub">Courte durée, en mémoire uniquement.</p>
+            <ul class="ex-list">
+              <li>TTL: <strong>300s</strong></li>
+              <li>Portée : <code>hls:key:read</code></li>
+              <li>Stockage : <strong>en mémoire</strong></li>
+            </ul>
+            <code id="token-preview" class="token-mask">en attente du jeton…</code>
+          </div>
+          <div class="ex-arrow">→</div>
+          <div class="ex-col">
+            <div class="ex-step">C</div>
+            <h3>Clé AES</h3>
+            <p class="ex-sub">Délivrée uniquement avec un jeton valide.</p>
+            <code>Authorization: Bearer &lt;token&gt;</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. ACCESS TESTS ----------------------------------------------- -->
+    <section class="card reveal">
+      <div class="card__head"><h2>Tests d’accès</h2><span class="chip chip--muted">En direct sur le serveur de clés</span></div>
+      <p class="card__lead">Trois requêtes montrent le contrôle en action : un accès valide, un jeton falsifié et un jeton absent.</p>
+      <div class="tests">
+        <button class="test-btn" id="btn-valid">
+          <span class="test-btn__title">Tester un accès valide</span>
+          <span class="test-btn__desc">Obtenir un jeton → demander la clé avec Bearer</span>
+        </button>
+        <button class="test-btn" id="btn-invalid">
+          <span class="test-btn__title">Tester un jeton invalide</span>
+          <span class="test-btn__desc">Demander la clé avec un jeton falsifié</span>
+        </button>
+        <button class="test-btn" id="btn-missing">
+          <span class="test-btn__title">Tester un jeton absent</span>
+          <span class="test-btn__desc">Demander la clé sans en-tête Authorization</span>
+        </button>
+      </div>
+      <div class="test-result" id="test-result" hidden>
+        <span class="test-result__dot"></span>
+        <div>
+          <strong id="test-result-title"></strong>
+          <span id="test-result-reason"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 + 8. LIVE ACTIVITY + PROTECTED LOGS ------------------------- -->
+    <section class="split">
+      <div class="card reveal">
+        <div class="card__head"><h2>Activité en direct</h2><button class="btn btn--ghost btn--sm" id="btn-clear-activity">Effacer</button></div>
+        <ul class="activity" id="activity"></ul>
+      </div>
+
+      <div class="card reveal">
+        <div class="card__head">
+          <h2>Journaux protégés</h2>
+          <button class="btn btn--ghost btn--sm" id="btn-refresh-logs">Actualiser les journaux</button>
+        </div>
+        <div class="log-counters">
+          <div class="counter counter--ok"><span class="counter__n" id="count-granted">0</span><span class="counter__l">Autorisés</span></div>
+          <div class="counter counter--bad"><span class="counter__n" id="count-denied">0</span><span class="counter__l">Refusés</span></div>
+        </div>
+        <div class="table-wrap">
+          <table class="log-table">
+            <thead>
+              <tr><th>Heure</th><th>Route</th><th>Utilisateur</th><th>Vidéo</th><th>Accès</th><th>Motif</th><th>ID requête</th></tr>
+            </thead>
+            <tbody id="log-body">
+              <tr class="log-empty"><td colspan="7">Aucun journal chargé pour l’instant. Nécessite <code>X-Admin-Token</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9. SECURITY SUMMARY ------------------------------------------- -->
+    <section class="reveal">
+      <div class="card__head card__head--section"><h2>Synthèse de sécurité</h2></div>
+      <div class="summary-grid">
+        <article class="card summary-card s-asset">
+          <h3>Éléments protégés</h3>
+          <ul><li>Contenu vidéo</li><li>Clé AES</li><li>Journaux d’accès</li></ul>
+        </article>
+        <article class="card summary-card s-threat">
+          <h3>Menaces gérées</h3>
+          <ul><li>Requête directe de la clé</li><li>Jeton invalide</li><li>Jeton dans l’URL</li><li>Journaux publics</li></ul>
+        </article>
+        <article class="card summary-card s-control">
+          <h3>Contrôles mis en place</h3>
+          <ul><li>HTTPS</li><li>HLS AES-128</li><li>Jeton temporaire</li><li>En-tête Authorization</li><li>Journaux protégés</li><li>Limitation du débit</li></ul>
+        </article>
+        <article class="card summary-card s-prod">
+          <h3>Notes pour la production</h3>
+          <ul><li>La session de démo simule une vraie connexion</li><li>Ce n’est pas un système DRM complet</li><li>À ajouter : fournisseur d’identité, certificat officiel, rotation des clés, SIEM</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <footer class="footer">
+      STREAM-IX · Infrastructure / Sécurité / Cloud — Diffusion vidéo sécurisée, accès temporaire, échange de clé protégé.
+    </footer>
+  </main>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
