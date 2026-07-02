@@ -9,6 +9,10 @@ const path = require("path");
 const crypto = require("crypto");
 const https = require("https");
 const rateLimit = require("express-rate-limit");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const { findUserByEmail, createUser, hasVideoAccess, seedDemoUser } = require("./db");
 
 const rootDir = path.join(__dirname, "..", "..");
 
@@ -19,22 +23,30 @@ const PORT = Number(process.env.PORT || 3001);
 const TOKEN_SECRET = process.env.TOKEN_SECRET;
 const TOKEN_TTL_SECONDS = Number(process.env.TOKEN_TTL_SECONDS || 300);
 
-const DEMO_SESSION_TOKEN = process.env.DEMO_SESSION_TOKEN;
+const SESSION_JWT_SECRET = process.env.SESSION_JWT_SECRET;
+const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || 3600);
+
 const ADMIN_LOGS_TOKEN = process.env.ADMIN_LOGS_TOKEN;
 
 const VIDEO_ID = process.env.VIDEO_ID || "streamix-demo";
-const DEMO_USER = process.env.DEMO_USER || "demo-user";
+
+const DEMO_USER_EMAIL = process.env.DEMO_USER_EMAIL || "demo@streamix.local";
+const DEMO_USER_PASSWORD = process.env.DEMO_USER_PASSWORD || "StreamixDemo123!";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-if (!TOKEN_SECRET || !DEMO_SESSION_TOKEN || !ADMIN_LOGS_TOKEN) {
+if (!TOKEN_SECRET || !SESSION_JWT_SECRET || !ADMIN_LOGS_TOKEN) {
   console.error("Missing required environment variables.");
-  console.error("Required: TOKEN_SECRET, DEMO_SESSION_TOKEN, ADMIN_LOGS_TOKEN");
+  console.error("Required: TOKEN_SECRET, SESSION_JWT_SECRET, ADMIN_LOGS_TOKEN");
   process.exit(1);
 }
+
+seedDemoUser(DEMO_USER_EMAIL, DEMO_USER_PASSWORD, VIDEO_ID);
+
+app.use(express.json());
 
 app.use(
   cors({
@@ -50,10 +62,9 @@ app.use(
     allowedHeaders: [
       "Content-Type",
       "Authorization",
-      "X-Streamix-Session",
       "X-Admin-Token"
     ],
-    methods: ["GET", "OPTIONS"]
+    methods: ["GET", "POST", "OPTIONS"]
   })
 );
 
@@ -86,6 +97,17 @@ const logsLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: "Too many log requests",
+    reason: "rate_limited"
+  }
+});
+
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many auth requests",
     reason: "rate_limited"
   }
 });
@@ -238,30 +260,139 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.get("/token", tokenLimiter, (req, res) => {
-  const sessionHeader = req.headers["x-streamix-session"];
+app.post("/auth/register", authLimiter, (req, res) => {
+  const { email, password } = req.body || {};
 
-  if (sessionHeader !== DEMO_SESSION_TOKEN) {
+  if (!email || !password || password.length < 8) {
+    return res.status(400).json({
+      error: "Bad request",
+      reason: "email and password (8+ chars) are required"
+    });
+  }
+
+  if (findUserByEmail(email)) {
+    return res.status(409).json({
+      error: "Conflict",
+      reason: "email_already_registered"
+    });
+  }
+
+  // Demo simplification: new accounts are auto-granted access to VIDEO_ID.
+  // A real deployment would leave video_access empty and grant it out of band.
+  createUser(email, password, [VIDEO_ID]);
+
+  const log = buildLog(req, {
+    route: "/auth/register",
+    user: email,
+    video: VIDEO_ID,
+    access: "granted",
+    reason: "account_created"
+  });
+
+  writeLog(log);
+
+  res.status(201).json({ email });
+});
+
+app.post("/auth/login", authLimiter, (req, res) => {
+  const { email, password } = req.body || {};
+
+  const user = email ? findUserByEmail(email) : null;
+  const passwordOk = user ? bcrypt.compareSync(password || "", user.password_hash) : false;
+
+  if (!user || !passwordOk) {
     const log = buildLog(req, {
-      route: "/token",
-      user: "unknown",
+      route: "/auth/login",
+      user: email || "unknown",
       video: VIDEO_ID,
       access: "denied",
-      reason: "invalid_demo_session"
+      reason: "invalid_credentials"
     });
 
     writeLog(log);
 
     return res.status(401).json({
       error: "Unauthorized",
-      reason: "invalid_demo_session"
+      reason: "invalid_credentials"
+    });
+  }
+
+  const sessionToken = jwt.sign(
+    { sub: user.id, email: user.email },
+    SESSION_JWT_SECRET,
+    { expiresIn: SESSION_TTL_SECONDS }
+  );
+
+  const log = buildLog(req, {
+    route: "/auth/login",
+    user: user.email,
+    video: VIDEO_ID,
+    access: "granted",
+    reason: "login_success"
+  });
+
+  writeLog(log);
+
+  res.json({
+    session_token: sessionToken,
+    token_type: "Bearer",
+    expires_in: SESSION_TTL_SECONDS,
+    email: user.email
+  });
+});
+
+app.get("/token", tokenLimiter, (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const sessionToken = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length)
+    : null;
+
+  let session = null;
+
+  try {
+    session = sessionToken ? jwt.verify(sessionToken, SESSION_JWT_SECRET) : null;
+  } catch {
+    session = null;
+  }
+
+  if (!session) {
+    const log = buildLog(req, {
+      route: "/token",
+      user: "unknown",
+      video: VIDEO_ID,
+      access: "denied",
+      reason: "invalid_session"
+    });
+
+    writeLog(log);
+
+    return res.status(401).json({
+      error: "Unauthorized",
+      reason: "invalid_session"
+    });
+  }
+
+  if (!hasVideoAccess(session.sub, VIDEO_ID)) {
+    const log = buildLog(req, {
+      route: "/token",
+      user: session.email,
+      video: VIDEO_ID,
+      access: "denied",
+      reason: "video_not_authorized"
+    });
+
+    writeLog(log);
+
+    return res.status(403).json({
+      error: "Forbidden",
+      reason: "video_not_authorized"
     });
   }
 
   const now = Math.floor(Date.now() / 1000);
 
   const payload = {
-    user: DEMO_USER,
+    user: session.email,
     video: VIDEO_ID,
     scope: "hls:key:read",
     iat: now,
@@ -272,7 +403,7 @@ app.get("/token", tokenLimiter, (req, res) => {
 
   const log = buildLog(req, {
     route: "/token",
-    user: DEMO_USER,
+    user: session.email,
     video: VIDEO_ID,
     access: "granted",
     reason: "temporary_token_issued"
