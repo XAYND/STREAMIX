@@ -3,6 +3,7 @@ backend/key-server/node_modules/
 
 backend/key-server/.env
 backend/key-server/logs/
+backend/key-server/data/
 *.log
 
 .DS_Store
